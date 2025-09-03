@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  streamlit-app:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./외평보고서.db:/app/외평보고서.db
+      - ./business_keywords.json:/app/business_keywords.json
+      - ./similar_industries.json:/app/similar_industries.json
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    restart: unless-stopped
