@@ -308,10 +308,10 @@ def initialize_gpt_chatbot(api_key: str):
     try:
         if st.session_state.gpt_chatbot is None:
             st.session_state.gpt_chatbot = GPTChatbot(api_key)
-        return True
+        return st.session_state.gpt_chatbot
     except Exception as e:
         st.error(f"GPT 챗봇 초기화 실패: {e}")
-        return False
+        return None
 
 def add_to_chat_history(question, answer, data=None):
     """채팅 히스토리에 대화 추가"""
@@ -459,18 +459,25 @@ def main():
         
         if st.button("질문하기") or user_question:
             if user_question:
-                # 유사기업 질문의 경우 API 키 없이도 답변 가능
-                if not api_key and ("유사기업" not in user_question and "유사" not in user_question):
+                # API 키 없이도 답변 가능한 질문 유형들
+                api_not_required_keywords = ["유사기업", "유사", "EV/Sales", "재무비율", "PSR", "WACC", "Ke", "Kd", "D/E"]
+                api_not_required = any(keyword in user_question for keyword in api_not_required_keywords)
+                
+                if not api_key and not api_not_required:
                     st.error("❌ API 키를 먼저 입력해주세요.")
                     return
                 
-                # GPT 챗봇 초기화
-                try:
-                    chatbot = initialize_gpt_chatbot(api_key)
-                    st.session_state.chatbot = chatbot
-                except Exception as e:
-                    st.error(f"❌ GPT 챗봇 초기화 실패: {e}")
-                    return
+                # GPT 챗봇 초기화 (API 키가 있는 경우에만)
+                chatbot = None
+                if api_key:
+                    try:
+                        chatbot = initialize_gpt_chatbot(api_key)
+                        if chatbot is None:
+                            st.error("❌ GPT 챗봇 초기화 실패")
+                            return
+                    except Exception as e:
+                        st.error(f"❌ GPT 챗봇 초기화 실패: {e}")
+                        return
                 
                 # 데이터 검색
                 if "유사기업" in user_question or "유사" in user_question:
@@ -545,12 +552,18 @@ def main():
                                 
                                 if st.button("GPT-4로 상세 분석하기"):
                                     try:
-                                        chatbot = GPTChatbot(api_key)
-                                        question_type = chatbot.get_question_type(user_question)
-                                        answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                                        # 기존에 초기화된 챗봇 사용
+                                        if chatbot is None:
+                                            chatbot = initialize_gpt_chatbot(api_key)
                                         
-                                        st.markdown("#### 🤖 GPT-4 분석 결과")
-                                        st.markdown(answer)
+                                        if chatbot is not None:
+                                            question_type = chatbot.get_question_type(user_question)
+                                            answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                                            
+                                            st.markdown("#### 🤖 GPT-4 상세 분석")
+                                            st.markdown(answer)
+                                        else:
+                                            st.error("❌ GPT 챗봇을 초기화할 수 없습니다.")
                                         
                                     except Exception as e:
                                         st.error(f"❌ GPT-4 분석 중 오류가 발생했습니다: {e}")
@@ -653,12 +666,18 @@ def main():
                             
                             if st.button("GPT-4로 상세 분석하기"):
                                 try:
-                                    chatbot = GPTChatbot(api_key)
-                                    question_type = chatbot.get_question_type(user_question)
-                                    answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                                    # 기존에 초기화된 챗봇 사용
+                                    if chatbot is None:
+                                        chatbot = initialize_gpt_chatbot(api_key)
                                     
-                                    st.markdown("#### 🤖 GPT-4 분석 결과")
-                                    st.markdown(answer)
+                                    if chatbot is not None:
+                                        question_type = chatbot.get_question_type(user_question)
+                                        answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                                        
+                                        st.markdown("#### 🤖 GPT-4 상세 분석")
+                                        st.markdown(answer)
+                                    else:
+                                        st.error("❌ GPT 챗봇을 초기화할 수 없습니다.")
                                     
                                 except Exception as e:
                                     st.error(f"❌ GPT-4 분석 중 오류가 발생했습니다: {e}")
@@ -667,12 +686,115 @@ def main():
                             st.info("💡 OpenAI API 키를 입력하면 GPT-4로 더 상세한 분석을 받을 수 있습니다.")
                 
                 elif "EV/Sales" in user_question or "재무비율" in user_question:
-                    # 재무비율 검색
-                    data = search_financial_ratios(user_question)
+                    # 재무비율 검색 - 섹터 키워드 추출
+                    sector_keywords = ['금융', 'IT', '제조', '서비스', '바이오', '게임', '소프트웨어', '화학', '철강', '자동차', '건설', '부동산', '유통', '식품', '음료', '의류', '화장품', '여행', '항공', '선박', '에너지', '전력', '가스', '통신', '미디어', '교육', '의료', '보험', '은행', '증권', '투자', '펀드', '부동산신탁', '리츠', '정보보안', '보안', '사이버보안', '보안솔루션', '보안시스템']
+                    
+                    sector = None
+                    for keyword in sector_keywords:
+                        if keyword in user_question:
+                            sector = keyword
+                            break
+                    
+                    # 섹터를 찾지 못한 경우 기본값
+                    if sector is None:
+                        sector = "금융"
+                    
+                    # 날짜 필터 추출 - 더 유연한 패턴 매칭
+                    start_date = None
+                    import re
+                    
+                    # 연도 패턴 찾기 (예: 2022, 2023, 2024 등)
+                    year_patterns = [
+                        r'(\d{4})년 이후',
+                        r'(\d{4})년부터',
+                        r'(\d{4}) 이후',
+                        r'(\d{4})부터',
+                        r'(\d{4})년'
+                    ]
+                    
+                    for pattern in year_patterns:
+                        match = re.search(pattern, user_question)
+                        if match:
+                            year = int(match.group(1))
+                            start_date = f"{year}-01-01"
+                            break
+                    
+                    data = search_financial_ratios(sector, start_date=start_date)
                     if not data.empty:
-                        st.success(f"✅ 재무비율 데이터 {len(data)}건을 찾았습니다.")
+                        # 검색 조건 표시
+                        search_info = f"✅ {sector}업 재무비율 데이터 {len(data)}건을 찾았습니다."
+                        if start_date:
+                            search_info += f" (검색 기간: {start_date} 이후)"
+                        st.success(search_info)
+                        
+                        # 검색 조건 요약
+                        st.info(f"🔍 검색 조건: 섹터='{sector}'" + (f", 시작일='{start_date}'" if start_date else ""))
+                        
+                        # 재무비율 데이터 표시
+                        st.markdown("### 📊 재무비율 데이터")
+                        
+                        # EV/Sales 값이 있는 데이터만 필터링
+                        if 'EV/Sales' in data.columns:
+                            ev_sales_data = data[data['EV/Sales'].notna() & (data['EV/Sales'] != '')]
+                            if not ev_sales_data.empty:
+                                st.markdown("#### EV/Sales 값")
+                                display_cols = ['공시발행_기업명', '공시발행_기업_산업분류', '발행일자', 'EV/Sales']
+                                st.dataframe(ev_sales_data[display_cols], width='stretch', hide_index=True)
+                                
+                                # EV/Sales 통계
+                                try:
+                                    ev_sales_values = pd.to_numeric(ev_sales_data['EV/Sales'], errors='coerce')
+                                    ev_sales_values = ev_sales_values.dropna()
+                                    if not ev_sales_values.empty:
+                                        st.markdown("#### EV/Sales 통계")
+                                        col1, col2, col3, col4 = st.columns(4)
+                                        with col1:
+                                            st.metric("평균", f"{ev_sales_values.mean():.2f}")
+                                        with col2:
+                                            st.metric("중간값", f"{ev_sales_values.median():.2f}")
+                                        with col3:
+                                            st.metric("최소값", f"{ev_sales_values.min():.2f}")
+                                        with col4:
+                                            st.metric("최대값", f"{ev_sales_values.max():.2f}")
+                                except:
+                                    pass
+                            else:
+                                st.warning("EV/Sales 값이 있는 데이터가 없습니다.")
+                        
+                        # 전체 재무비율 데이터 표시
+                        st.markdown("#### 전체 재무비율 데이터")
+                        display_cols = ['공시발행_기업명', '공시발행_기업_산업분류', '발행일자', 'EV/Sales', 'PSR', 'WACC']
+                        available_cols = [col for col in display_cols if col in data.columns]
+                        st.dataframe(data[available_cols], width='stretch', hide_index=True)
+                        
+                        # API가 있는 경우 GPT 분석 추가 제공
+                        if api_key:
+                            st.markdown("---")
+                            st.markdown("### 🤖 GPT-4 상세 분석 (선택사항)")
+                            
+                            if st.button("GPT-4로 재무비율 분석하기"):
+                                try:
+                                    # 기존에 초기화된 챗봇 사용
+                                    if chatbot is None:
+                                        chatbot = initialize_gpt_chatbot(api_key)
+                                    
+                                    if chatbot is not None:
+                                        question_type = chatbot.get_question_type(user_question)
+                                        answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                                        
+                                        st.markdown("#### 🤖 GPT-4 상세 분석")
+                                        st.markdown(answer)
+                                    else:
+                                        st.error("❌ GPT 챗봇을 초기화할 수 없습니다.")
+                                    
+                                except Exception as e:
+                                    st.error(f"❌ GPT-4 분석 중 오류가 발생했습니다: {e}")
+                                    st.info("데이터는 이미 위에 표시되어 있습니다.")
+                        else:
+                            st.info("💡 OpenAI API 키를 입력하면 GPT-4로 더 상세한 분석을 받을 수 있습니다.")
+                        
                     else:
-                        st.warning("재무비율 데이터를 찾을 수 없습니다.")
+                        st.warning(f"{sector}업 재무비율 데이터를 찾을 수 없습니다.")
                         return
                 else:
                     # 일반 기업 검색
@@ -683,18 +805,19 @@ def main():
                         st.warning("관련 데이터를 찾을 수 없습니다.")
                         return
                 
-                # GPT 분석 및 답변
-                with st.spinner("🤖 GPT-4가 데이터를 분석하고 있습니다..."):
-                    try:
-                        question_type = chatbot.get_question_type(user_question)
-                        answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                # GPT 분석 및 답변 (재무비율 질문이 아닌 경우에만)
+                if not ("EV/Sales" in user_question or "재무비율" in user_question) and chatbot is not None:
+                    with st.spinner("🤖 GPT-4가 데이터를 분석하고 있습니다..."):
+                        try:
+                            question_type = chatbot.get_question_type(user_question)
+                            answer = chatbot.analyze_data_and_answer(user_question, data, question_type)
+                            
+                            st.markdown("### 🤖 GPT-4 답변")
+                            st.markdown(answer)
                         
-                        st.markdown("### 🤖 GPT-4 답변")
-                        st.markdown(answer)
-                    
-                    except Exception as e:
-                        st.error(f"❌ GPT-4 분석 중 오류가 발생했습니다: {e}")
-                        st.info("다시 시도해보거나 다른 질문을 해보세요.")
+                        except Exception as e:
+                            st.error(f"❌ GPT-4 분석 중 오류가 발생했습니다: {e}")
+                            st.info("다시 시도해보거나 다른 질문을 해보세요.")
             else:
                 st.warning("질문을 입력해주세요.")
     
