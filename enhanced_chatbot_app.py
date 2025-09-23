@@ -180,7 +180,17 @@ def process_valuation_analysis(question):
         numeric_columns = ['WACC', 'Ke', 'Kd', 'D/E', 'EV/Sales', 'PSR', 'PER', 'EV/EBITDA', 'PBR', 'NOA / Enterprise Value', '추정기간 현재가치 / 영업가치']
         for col in numeric_columns:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce')
+                # Handle both decimal format (0.178) and percentage format (17.78%)
+                col_data = df[col].astype(str).str.replace(',', '').str.replace('\t', '')
+                has_percent = col_data.str.contains('%', na=False)
+                
+                # Convert to numeric, removing % symbol
+                numeric_data = pd.to_numeric(col_data.str.replace('%', ''), errors='coerce')
+                
+                # For values that had % symbol, divide by 100 to convert to decimal
+                numeric_data[has_percent] = numeric_data[has_percent] / 100
+                
+                df[col] = numeric_data
         
         # g 컬럼 처리 (영구성장률)
         g_columns = ['g', '영구성장률', '영구성장', '영구성장율']
@@ -199,11 +209,13 @@ def process_valuation_analysis(question):
                 grp = df.groupby('공시발행_기업_산업분류')['WACC'].median().dropna().sort_values(ascending=False)
                 if not grp.empty:
                     st.subheader('산업별 WACC 중앙값')
-                    st.dataframe(grp.reset_index().rename(columns={'WACC': 'WACC 중앙값'}), hide_index=True, use_container_width=True)
+                    # Convert to percentage for display
+                    grp_display = grp * 100
+                    st.dataframe(grp_display.reset_index().rename(columns={'WACC': 'WACC 중앙값 (%)'}), hide_index=True, use_container_width=True)
                     
                     # 차트 생성
-                    fig = px.bar(x=grp.values, y=grp.index, orientation='h', 
-                                title='산업별 WACC 중앙값', labels={'x': 'WACC 중앙값', 'y': '산업분류'})
+                    fig = px.bar(x=grp_display.values, y=grp_display.index, orientation='h', 
+                                title='산업별 WACC 중앙값', labels={'x': 'WACC 중앙값 (%)', 'y': '산업분류'})
                     st.plotly_chart(fig, use_container_width=True)
                     return True
         
@@ -213,11 +225,13 @@ def process_valuation_analysis(question):
                 grp = df.groupby('평가법인')['WACC'].median().dropna().sort_values(ascending=False)
                 if not grp.empty:
                     st.subheader('평가법인별 WACC 중앙값 비교')
-                    st.dataframe(grp.reset_index().rename(columns={'WACC': 'WACC 중앙값'}), hide_index=True, use_container_width=True)
+                    # Convert to percentage for display
+                    grp_display = grp * 100
+                    st.dataframe(grp_display.reset_index().rename(columns={'WACC': 'WACC 중앙값 (%)'}), hide_index=True, use_container_width=True)
                     
                     # 차트 생성
-                    fig = px.bar(x=grp.values, y=grp.index, orientation='h',
-                                title='평가법인별 WACC 중앙값', labels={'x': 'WACC 중앙값', 'y': '평가법인'})
+                    fig = px.bar(x=grp_display.values, y=grp_display.index, orientation='h', 
+                                title='평가법인별 WACC 중앙값', labels={'x': 'WACC 중앙값 (%)', 'y': '평가법인'})
                     st.plotly_chart(fig, use_container_width=True)
                     return True
         
@@ -257,17 +271,17 @@ def process_valuation_analysis(question):
                     st.metric('D/E 미기재 비중', f'{pct_missing:.1f}%')
                 with col2:
                     if len(missing) > 0:
-                        st.metric('미기재 그룹 평균 WACC', f'{missing.mean():.2f}')
+                        st.metric('미기재 그룹 평균 WACC', f'{missing.mean() * 100:.2f}%')
                     else:
                         st.metric('미기재 그룹 평균 WACC', 'N/A')
                 with col3:
                     if len(present) > 0:
-                        st.metric('기재 그룹 평균 WACC', f'{present.mean():.2f}')
+                        st.metric('기재 그룹 평균 WACC', f'{present.mean() * 100:.2f}%')
                     else:
                         st.metric('기재 그룹 평균 WACC', 'N/A')
                 
                 if len(missing)>0 and len(present)>0:
-                    st.metric('평균 WACC 차이(미기재-기재)', f'{(missing.mean()-present.mean()):.2f}p')
+                    st.metric('평균 WACC 차이(미기재-기재)', f'{(missing.mean()-present.mean()) * 100:.2f}%p')
                 
                 return True
         
@@ -290,12 +304,16 @@ def process_valuation_analysis(question):
                 topn = df[available_cols].dropna(subset=['WACC']).sort_values('WACC', ascending=False).head(n)
                 
                 st.subheader(f'랭킹: WACC Top {n}')
-                st.dataframe(topn, hide_index=True, use_container_width=True)
+                # Convert WACC to percentage for display
+                topn_display = topn.copy()
+                topn_display['WACC'] = topn_display['WACC'] * 100
+                topn_display = topn_display.rename(columns={'WACC': 'WACC (%)'})
+                st.dataframe(topn_display, hide_index=True, use_container_width=True)
                 
                 # 차트 생성
                 if not topn.empty:
-                    fig = px.bar(x=topn['WACC'], y=topn['공시발행_기업명'], orientation='h',
-                                title=f'WACC Top {n}', labels={'x': 'WACC', 'y': '기업명'})
+                    fig = px.bar(x=topn['WACC'] * 100, y=topn['공시발행_기업명'], orientation='h',
+                                title=f'WACC Top {n}', labels={'x': 'WACC (%)', 'y': '기업명'})
                     st.plotly_chart(fig, use_container_width=True)
                 
                 return True
@@ -1034,16 +1052,17 @@ def process_valuation_analysis(question):
                         
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric('평균 WACC', f'{wacc_values.mean():.2f}')
+                            st.metric('평균 WACC', f'{wacc_values.mean() * 100:.2f}%')
                         with col2:
-                            st.metric('중앙값 WACC', f'{wacc_values.median():.2f}')
+                            st.metric('중앙값 WACC', f'{wacc_values.median() * 100:.2f}%')
                         with col3:
-                            st.metric('표준편차', f'{wacc_values.std():.2f}')
+                            st.metric('표준편차', f'{wacc_values.std() * 100:.2f}%')
                         with col4:
                             st.metric('표본수', len(wacc_values))
                         
                         # 분포 차트
-                        fig = px.histogram(x=wacc_values, nbins=20, title=f'{year}년 {sector if sector else "전체"} 업종 WACC 분포')
+                        fig = px.histogram(x=wacc_values * 100, nbins=20, title=f'{year}년 {sector if sector else "전체"} 업종 WACC 분포')
+                        fig.update_layout(xaxis_title='WACC (%)')
                         st.plotly_chart(fig, use_container_width=True)
                         
                         return True
