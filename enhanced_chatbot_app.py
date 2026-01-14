@@ -24,7 +24,12 @@ class SmartSearchSystem:
             with open('similar_industries.json', 'r', encoding='utf-8') as f:
                 self.similar_industries = json.load(f)
         except FileNotFoundError:
-            st.warning("키워드 사전 파일을 찾을 수 없습니다. 기본 검색 모드로 동작합니다.")
+            # Streamlit 컨텍스트가 있을 때만 경고 표시
+            try:
+                st.warning("키워드 사전 파일을 찾을 수 없습니다. 기본 검색 모드로 동작합니다.")
+            except:
+                # Streamlit 컨텍스트가 없으면 경고 없이 진행
+                pass
             self.keyword_dict = {}
             self.similar_industries = {}
     
@@ -758,8 +763,6 @@ def process_valuation_analysis(question):
                     st.dataframe(pivot_table.astype(int), use_container_width=True)
                     
                     # 히트맵 차트 생성
-                    import plotly.graph_objects as go
-                    
                     fig = go.Figure(data=go.Heatmap(
                         z=pivot_table.values,
                         x=pivot_table.columns,
@@ -1017,7 +1020,7 @@ def process_valuation_analysis(question):
                 return True
         
         # 11. 특정 연도 + 산업 평균 WACC
-        elif any(year in question for year in ['2023', '2022', '2024']) and "wacc" in question_lower and "평균" in question:
+        elif any(year in question for year in ['2023', '2022', '2024', '2025']) and "wacc" in question_lower and "평균" in question:
             # 연도 추출
             import re
             year_match = re.search(r'(202[0-9])', question)
@@ -1027,7 +1030,7 @@ def process_valuation_analysis(question):
                 end_date = pd.Timestamp(f'{year}-12-31')
                 
                 # 산업 키워드 추출
-                sector_keywords = ['헬스케어', '제조', '금융', 'IT', '바이오', '게임', '소프트웨어', '소비재']
+                sector_keywords = ['헬스케어', '제조', '제조업', '금융', '금융업', 'IT', '바이오', '게임', '소프트웨어', '소비재']
                 sector = None
                 for keyword in sector_keywords:
                     if keyword in question:
@@ -1070,6 +1073,286 @@ def process_valuation_analysis(question):
                         st.warning(f"{year}년 {sector if sector else '전체'} 업종의 WACC 데이터를 찾을 수 없습니다.")
                         return True
         
+        # 12. 연도별 주요통계
+        elif any(year in question for year in ['2022', '2023', '2024', '2025']) and ("주요통계" in question or "통계" in question and "연도별" in question):
+            import re
+            year_match = re.search(r'(202[0-9])', question)
+            if year_match:
+                year = int(year_match.group(1))
+                start_date = pd.Timestamp(f'{year}-01-01')
+                end_date = pd.Timestamp(f'{year}-12-31')
+                
+                # 날짜 필터링
+                if '발행일자' in df.columns:
+                    df['발행일자'] = pd.to_datetime(df['발행일자'], errors='coerce')
+                    df_filtered = df[(df['발행일자'] >= start_date) & (df['발행일자'] <= end_date)]
+                else:
+                    df_filtered = df
+                
+                if len(df_filtered) == 0:
+                    st.warning(f"{year}년 데이터를 찾을 수 없습니다.")
+                    return True
+                
+                st.subheader(f'{year}년 주요 통계')
+                
+                # 1. 기본 통계
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric('총 발행 건수', f'{len(df_filtered):,}건')
+                with col2:
+                    if '공시발행_기업명' in df_filtered.columns:
+                        unique_companies = df_filtered['공시발행_기업명'].nunique()
+                        st.metric('공시발행 기업 수', f'{unique_companies:,}개')
+                with col3:
+                    if '평가대상기업명' in df_filtered.columns:
+                        unique_targets = df_filtered['평가대상기업명'].nunique()
+                        st.metric('평가대상 기업 수', f'{unique_targets:,}개')
+                with col4:
+                    if '평가법인' in df_filtered.columns:
+                        unique_firms = df_filtered['평가법인'].nunique()
+                        st.metric('평가법인 수', f'{unique_firms:,}개')
+                
+                st.markdown("---")
+                
+                # 2. WACC 통계
+                if 'WACC' in df_filtered.columns:
+                    wacc_values = pd.to_numeric(df_filtered['WACC'], errors='coerce').dropna()
+                    if len(wacc_values) > 0:
+                        st.markdown("### 📊 WACC 통계")
+                        col1, col2, col3, col4, col5 = st.columns(5)
+                        with col1:
+                            st.metric('평균', f'{wacc_values.mean() * 100:.2f}%')
+                        with col2:
+                            st.metric('중앙값', f'{wacc_values.median() * 100:.2f}%')
+                        with col3:
+                            st.metric('최소값', f'{wacc_values.min() * 100:.2f}%')
+                        with col4:
+                            st.metric('최대값', f'{wacc_values.max() * 100:.2f}%')
+                        with col5:
+                            st.metric('표준편차', f'{wacc_values.std() * 100:.2f}%')
+                
+                st.markdown("---")
+                
+                # 3. 업종별 분포
+                if '공시발행_기업_산업분류' in df_filtered.columns:
+                    st.markdown("### 🏭 업종별 분포 (TOP 10)")
+                    sector_counts = df_filtered['공시발행_기업_산업분류'].value_counts().head(10)
+                    sector_df = pd.DataFrame({
+                        '업종': sector_counts.index,
+                        '건수': sector_counts.values
+                    })
+                    st.dataframe(sector_df, hide_index=True, use_container_width=True)
+                    
+                    # 차트
+                    fig = px.bar(sector_df, x='업종', y='건수', 
+                                title=f'{year}년 업종별 발행 건수 (TOP 10)')
+                    fig.update_layout(xaxis={'tickangle': 45})
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("---")
+                
+                # 4. 멀티플 통계
+                st.markdown("### 💰 멀티플 중앙값")
+                multiples = ['EV/EBITDA', 'EV/Sales', 'PER', 'PSR']
+                available_multiples = [m for m in multiples if m in df_filtered.columns]
+                
+                if available_multiples:
+                    multiple_stats = []
+                    for multiple in available_multiples:
+                        values = pd.to_numeric(df_filtered[multiple], errors='coerce').dropna()
+                        if len(values) > 0:
+                            multiple_stats.append({
+                                '지표': multiple,
+                                '중앙값': values.median(),
+                                '평균': values.mean(),
+                                '표본수': len(values)
+                            })
+                    
+                    if multiple_stats:
+                        multiple_df = pd.DataFrame(multiple_stats)
+                        st.dataframe(multiple_df, hide_index=True, use_container_width=True)
+                else:
+                    st.info("멀티플 데이터가 없습니다.")
+                
+                st.markdown("---")
+                
+                # 5. 평가법인별 활동량
+                if '평가법인' in df_filtered.columns:
+                    st.markdown("### 🏢 평가법인별 활동량 (TOP 5)")
+                    firm_counts = df_filtered['평가법인'].value_counts().head(5)
+                    firm_df = pd.DataFrame({
+                        '평가법인': firm_counts.index,
+                        '건수': firm_counts.values
+                    })
+                    st.dataframe(firm_df, hide_index=True, use_container_width=True)
+                    
+                    # 차트
+                    fig = px.bar(firm_df, x='평가법인', y='건수',
+                                title=f'{year}년 평가법인별 활동량 (TOP 5)')
+                    fig.update_layout(xaxis={'tickangle': 45})
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("---")
+                
+                # 6. 월별 발행 추이
+                if '발행일자' in df_filtered.columns:
+                    st.markdown("### 📅 월별 발행 추이")
+                    df_monthly = df_filtered.copy()
+                    df_monthly = df_monthly.copy()  # SettingWithCopyWarning 방지
+                    df_monthly.loc[:, '월'] = df_monthly['발행일자'].dt.to_period('M').astype(str)
+                    monthly_counts = df_monthly['월'].value_counts().sort_index()
+                    monthly_df = pd.DataFrame({
+                        '월': monthly_counts.index,
+                        '건수': monthly_counts.values
+                    })
+                    
+                    fig = px.line(monthly_df, x='월', y='건수',
+                                 title=f'{year}년 월별 발행 추이',
+                                 markers=True)
+                    fig.update_layout(xaxis={'tickangle': 45})
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                return True
+        
+        # 13. 연도별 산업별 WACC 트렌드 분석
+        elif "트렌드" in question and "wacc" in question_lower and ("연도별" in question or "산업별" in question):
+            st.subheader('연도별 산업별 WACC 트렌드 분석')
+            
+            # 분석할 연도 목록
+            years = [2022, 2023, 2024, 2025]
+            
+            # 분석할 산업 목록
+            sectors = ['금융', '금융업', '소비재', '헬스케어', 'IT', '제조', '제조업', '바이오']
+            
+            # 연도별 산업별 WACC 데이터 수집
+            trend_data = []
+            
+            for year in years:
+                start_date = pd.Timestamp(f'{year}-01-01')
+                end_date = pd.Timestamp(f'{year}-12-31')
+                
+                # 날짜 필터링
+                if '발행일자' in df.columns:
+                    df['발행일자'] = pd.to_datetime(df['발행일자'], errors='coerce')
+                    df_year = df[(df['발행일자'] >= start_date) & (df['발행일자'] <= end_date)]
+                else:
+                    df_year = df
+                
+                for sector in sectors:
+                    # 산업 필터링
+                    if '공시발행_기업_산업분류' in df_year.columns:
+                        df_sector = df_year[df_year['공시발행_기업_산업분류'].str.contains(sector, na=False)]
+                    else:
+                        df_sector = df_year
+                    
+                    # WACC 값 추출
+                    if 'WACC' in df_sector.columns:
+                        wacc_values = pd.to_numeric(df_sector['WACC'], errors='coerce').dropna()
+                        if len(wacc_values) > 0:
+                            trend_data.append({
+                                '연도': year,
+                                '산업': sector,
+                                '평균_WACC': wacc_values.mean() * 100,
+                                '중앙값_WACC': wacc_values.median() * 100,
+                                '표본수': len(wacc_values)
+                            })
+            
+            if trend_data:
+                trend_df = pd.DataFrame(trend_data)
+                
+                # 산업별로 그룹화하여 표시
+                st.markdown("### 📊 연도별 산업별 WACC 평균")
+                
+                # 피벗 테이블 생성 (연도 x 산업)
+                pivot_avg = trend_df.pivot_table(
+                    index='산업', 
+                    columns='연도', 
+                    values='평균_WACC', 
+                    aggfunc='mean'
+                )
+                
+                # 표본수가 0인 경우 제외
+                pivot_avg = pivot_avg.fillna(0)
+                
+                st.dataframe(pivot_avg.round(2), use_container_width=True)
+                
+                # 라인 차트 생성 (산업별 트렌드)
+                st.markdown("### 📈 산업별 WACC 트렌드 (라인 차트)")
+                
+                # 각 산업별로 라인 차트 생성
+                fig = go.Figure()
+                
+                for sector in trend_df['산업'].unique():
+                    sector_data = trend_df[trend_df['산업'] == sector].sort_values('연도')
+                    if len(sector_data) > 0:
+                        fig.add_trace(go.Scatter(
+                            x=sector_data['연도'],
+                            y=sector_data['평균_WACC'],
+                            mode='lines+markers',
+                            name=sector,
+                            line=dict(width=2),
+                            marker=dict(size=8)
+                        ))
+                
+                fig.update_layout(
+                    title='연도별 산업별 WACC 트렌드',
+                    xaxis_title='연도',
+                    yaxis_title='평균 WACC (%)',
+                    hovermode='x unified',
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 히트맵 생성
+                st.markdown("### 🔥 연도별 산업별 WACC 히트맵")
+                
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=pivot_avg.values,
+                    x=pivot_avg.columns,
+                    y=pivot_avg.index,
+                    colorscale='RdYlGn_r',  # 빨강-노랑-초록 (역순, 높은 값이 빨강)
+                    text=pivot_avg.values.round(2),
+                    texttemplate="%{text}%",
+                    textfont={"size": 10},
+                    hoverongaps=False,
+                    colorbar=dict(title="WACC (%)")
+                ))
+                
+                fig_heatmap.update_layout(
+                    title='연도별 산업별 WACC 히트맵',
+                    xaxis_title='연도',
+                    yaxis_title='산업',
+                    height=400
+                )
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+                
+                # 상세 데이터 표시
+                st.markdown("### 📋 상세 데이터")
+                display_trend = trend_df.copy()
+                display_trend['평균_WACC'] = display_trend['평균_WACC'].apply(lambda x: f"{x:.2f}%")
+                display_trend['중앙값_WACC'] = display_trend['중앙값_WACC'].apply(lambda x: f"{x:.2f}%")
+                display_trend = display_trend.sort_values(['산업', '연도'])
+                st.dataframe(display_trend, hide_index=True, use_container_width=True)
+                
+                # 통계 요약
+                st.markdown("### 📊 통계 요약")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("분석 연도 수", len(years))
+                with col2:
+                    st.metric("분석 산업 수", len(trend_df['산업'].unique()))
+                with col3:
+                    st.metric("총 데이터 포인트", len(trend_df))
+                with col4:
+                    avg_wacc = trend_df['평균_WACC'].mean()
+                    st.metric("전체 평균 WACC", f"{avg_wacc:.2f}%")
+                
+                return True
+            else:
+                st.warning("트렌드 분석을 위한 데이터를 찾을 수 없습니다.")
+                return True
+        
         return False
         
     except Exception as e:
@@ -1083,11 +1366,325 @@ st.set_page_config(
     layout="wide"
 )
 
+# 언어 번역 딕셔너리
+TRANSLATIONS = {
+    'ko': {
+        'title': '주요사항보고서 공시 DB',
+        'sidebar_title': '📋 외평보고서 분석 시스템',
+        'sidebar_desc': '외평보고서 데이터를 분석하고 검색할 수 있습니다.',
+        'chat_tab': '💬 챗봇',
+        'search_tab': '🔍 데이터 검색',
+        'chat_header': '💬 예상 Q&A',
+        'search_header': '🔍 데이터 검색',
+        'search_type': '검색 유형을 선택하세요:',
+        'company_name': '기업명',
+        'industry': '산업분류',
+        'business': '주요사업',
+        'issue_date': '발행일자',
+        'search_button': '검색',
+        'enter_company': '기업명을 입력하세요:',
+        'enter_industry': '산업분류를 입력하세요:',
+        'enter_business': '주요사업을 입력하세요:',
+        'select_date': '발행일자 기간을 선택하세요:',
+        'example_questions': '예시 질문:',
+        'wacc_analysis': '**WACC 분석**',
+        'similar_companies': '**유사기업 분석**',
+        'period_analysis': '**기간별 분석**',
+        'noa_analysis': '**비영업자산 분석**',
+        'qc_analysis': '**품질관리(QC)**',
+        'industry_finance': '**연도별 금융업 분석**',
+        'industry_consumer': '**연도별 소비재 분석**',
+        'industry_healthcare': '**연도별 헬스케어 분석**',
+        'industry_it': '**연도별 IT 분석**',
+        'industry_manufacturing': '**연도별 제조업 분석**',
+        'industry_bio': '**연도별 바이오 분석**',
+        'transaction_rel': '**업종 간 거래 관계**',
+        'other_analysis': '**기타 분석**',
+        'yearly_stats': '**연도별 주요통계**',
+        'wacc_trend': '**WACC 트렌드 분석**',
+        # 버튼 텍스트
+        'btn_virtual_asset': '가상자산 사업 유사기업',
+        'btn_music': '음원 사업 유사기업',
+        'btn_ai': 'AI 업계 유사기업',
+        'btn_bio': '바이오 업계 유사기업',
+        'btn_game': '게임 업계 유사기업',
+        'btn_cloud': '클라우드 유사기업',
+        'btn_security': '정보보안 업계 유사기업',
+        'btn_finance_evsales': '금융업 기업들의 EV/Sales',
+        'btn_blockchain': '블록체인 유사기업',
+        'btn_industry_wacc': '산업별 WACC 중앙값',
+        'btn_valuator_wacc': '평가법인별 WACC 비교',
+        'btn_g_wacc': 'g ≥ WACC 위반',
+        'btn_perpetual_cf': '영구현금흐름 비율',
+        'btn_wacc_top10': 'WACC Top 10',
+        'btn_high_noa': '비영업자산 비중 높은 기업',
+        'btn_sector_noa': '업종별 비영업자산구성',
+        'btn_de_missing': 'D/E 미기재 영향',
+        'btn_recent_valuators': '최근 12개월 평가법인',
+        'btn_transaction_matrix': '업종 간 거래 매트릭스',
+        'btn_investment_mapping': '투자 맵핑 분석',
+        'btn_multiple_median': '산업별 멀티플 중앙값',
+        'btn_wacc_trend': '연도별 산업별 WACC 트렌드',
+        # 섹션 제목
+        'section_similar_q': '**유사기업 질문**',
+        'section_industry_similar': '**업종별 유사기업**',
+        'section_financial_ratio': '**재무비율 질문**',
+        'section_valuation': '**밸류에이션 분석**',
+        'section_cashflow': '**현금흐름 분석**',
+        'section_noa': '**비영업자산 분석**',
+        # 질문 텍스트
+        'q_virtual_asset': '가상자산 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_music': '음원 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_ai': 'AI 업계 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_bio': '바이오 업계 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_game': '게임 업계 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_cloud': '클라우드 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_security': '정보보안 업계 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_finance_evsales': '2022년 이후 발행된 금융업 기업들의 EV/Sales 값은 어떻게 되나요?',
+        'q_blockchain': '블록체인 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+        'q_industry_wacc': '산업별 WACC 중앙값은 어떻게 되나요?',
+        'q_valuator_wacc': '평가법인별 WACC 중앙값을 비교해주세요',
+        'q_g_wacc': 'g가 WACC보다 크거나 같은 위반 사례들을 보여주세요',
+        'q_perpetual_cf': '영구현금흐름 비율이 50% 이상인 기업들을 보여주세요',
+        'q_wacc_top10': 'WACC가 가장 높은 상위 10개 기업은 어디인가요?',
+        'q_high_noa': '기업가치 대비 비영업자산이 많은 기업들을 보여주세요',
+        'q_sector_noa': '업종별 비영업용자산구성내역 빈도를 TOP5 순서로 보여주세요',
+        'q_de_missing': 'D/E 미기재가 WACC에 미치는 영향을 분석해주세요',
+        'q_recent_valuators': '최근 12개월 동안 평가법인별 활동량 TOP5를 보여주세요',
+        'q_transaction_matrix': '업종 간 거래 관계를 보여주세요',
+        'q_investment_mapping': '공시발행기업의 투자 맵핑을 보여주세요',
+        'q_multiple_median': '산업별 EV/EBITDA 중앙값을 비교해주세요',
+        'q_wacc_trend': '연도별 산업별 WACC 트렌드를 보여주세요',
+        # 입력 필드
+        'input_question': '질문을 입력하세요:',
+        'input_placeholder': '예: 가상자산 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+        'btn_ask': '질문하기',
+        # 사이드바
+        'sidebar_usage': '📚 사용법',
+        'sidebar_usage_desc': '**간편한 Q&A 분석:**',
+        'sidebar_usage_point1': '- 예시 질문 버튼을 클릭하거나 직접 질문 입력',
+        'sidebar_usage_point2': '- 유사기업, 재무비율, 밸류에이션 분석 등 다양한 정보 제공',
+        'sidebar_usage_point3': '- API 키 없이도 모든 기능 사용 가능',
+        'sidebar_examples': '💡 예시 질문',
+        'sidebar_similar_title': '**유사기업 질문:**',
+        'sidebar_similar_ex1': '- "가상자산 사업 유사기업"',
+        'sidebar_similar_ex2': '- "음원 사업 유사기업"',
+        'sidebar_similar_ex3': '- "게임 업계 유사기업"',
+        'sidebar_financial_title': '**재무비율 질문:**',
+        'sidebar_financial_ex1': '- "금융업 기업들의 EV/Sales"',
+        'sidebar_financial_ex2': '- "산업별 WACC 중앙값"',
+        'sidebar_financial_ex3': '- "평가법인별 WACC 비교"',
+        'sidebar_valuation_title': '**밸류에이션 분석:**',
+        'sidebar_valuation_ex1': '- "g가 WACC보다 큰 위반 사례"',
+        'sidebar_valuation_ex2': '- "D/E 미기재 영향 분석"',
+        'sidebar_valuation_ex3': '- "WACC Top 10"',
+        'sidebar_new_title': '**새로운 분석:**',
+        'sidebar_new_ex1': '- "영구현금흐름 비율이 50% 이상인 기업"',
+        'sidebar_new_ex2': '- "업종별 비영업용자산구성내역 TOP5"',
+        'sidebar_new_ex3': '- "2023년 헬스케어 WACC"',
+        'sidebar_new_ex4': '- "2022년 IT업 WACC"',
+        'sidebar_new_ex5': '- "2023년 바이오 WACC"',
+        'sidebar_new_ex6': '- "연도별 금융업/소비재/헬스케어 WACC"',
+    },
+    'en': {
+        'title': 'Key Disclosure Reports DB',
+        'sidebar_title': '📋 Valuation Report Analysis System',
+        'sidebar_desc': 'Analyze and search valuation report data.',
+        'chat_tab': '💬 Chatbot',
+        'search_tab': '🔍 Data Search',
+        'chat_header': '💬 Expected Q&A',
+        'search_header': '🔍 Data Search',
+        'search_type': 'Select search type:',
+        'company_name': 'Company Name',
+        'industry': 'Industry',
+        'business': 'Main Business',
+        'issue_date': 'Issue Date',
+        'search_button': 'Search',
+        'enter_company': 'Enter company name:',
+        'enter_industry': 'Enter industry:',
+        'enter_business': 'Enter main business:',
+        'select_date': 'Select date range:',
+        'example_questions': 'Example Questions:',
+        'wacc_analysis': '**WACC Analysis**',
+        'similar_companies': '**Similar Companies Analysis**',
+        'period_analysis': '**Period Analysis**',
+        'noa_analysis': '**Non-Operating Assets Analysis**',
+        'qc_analysis': '**Quality Control (QC)**',
+        'industry_finance': '**Annual Finance Industry Analysis**',
+        'industry_consumer': '**Annual Consumer Industry Analysis**',
+        'industry_healthcare': '**Annual Healthcare Industry Analysis**',
+        'industry_it': '**Annual IT Industry Analysis**',
+        'industry_manufacturing': '**Annual Manufacturing Industry Analysis**',
+        'industry_bio': '**Annual Bio Industry Analysis**',
+        'transaction_rel': '**Inter-Industry Transaction Relations**',
+        'other_analysis': '**Other Analysis**',
+        'yearly_stats': '**Annual Key Statistics**',
+        'wacc_trend': '**WACC Trend Analysis**',
+        # 버튼 텍스트
+        'btn_virtual_asset': 'Virtual Asset Business Similar Companies',
+        'btn_music': 'Music Business Similar Companies',
+        'btn_ai': 'AI Industry Similar Companies',
+        'btn_bio': 'Bio Industry Similar Companies',
+        'btn_game': 'Game Industry Similar Companies',
+        'btn_cloud': 'Cloud Similar Companies',
+        'btn_security': 'Information Security Industry Similar Companies',
+        'btn_finance_evsales': 'Finance Industry EV/Sales',
+        'btn_blockchain': 'Blockchain Similar Companies',
+        'btn_industry_wacc': 'Industry WACC Median',
+        'btn_valuator_wacc': 'Compare WACC by Valuation Firm',
+        'btn_g_wacc': 'g ≥ WACC Violation',
+        'btn_perpetual_cf': 'Perpetual Cash Flow Ratio',
+        'btn_wacc_top10': 'WACC Top 10',
+        'btn_high_noa': 'Companies with High Non-Operating Assets',
+        'btn_sector_noa': 'Non-Operating Assets by Industry',
+        'btn_de_missing': 'D/E Non-Disclosure Impact',
+        'btn_recent_valuators': 'Valuation Firms (Last 12 Months)',
+        'btn_transaction_matrix': 'Inter-Industry Transaction Matrix',
+        'btn_investment_mapping': 'Investment Mapping Analysis',
+        'btn_multiple_median': 'Industry Multiples Median',
+        'btn_wacc_trend': 'Annual Industry WACC Trend',
+        # 섹션 제목
+        'section_similar_q': '**Similar Company Questions**',
+        'section_industry_similar': '**Industry-Specific Similar Companies**',
+        'section_financial_ratio': '**Financial Ratio Questions**',
+        'section_valuation': '**Valuation Analysis**',
+        'section_cashflow': '**Cash Flow Analysis**',
+        'section_noa': '**Non-Operating Assets Analysis**',
+        # 질문 텍스트
+        'q_virtual_asset': 'What are the similar companies selected by companies in the virtual asset business?',
+        'q_music': 'What are the similar companies selected by companies in the music business?',
+        'q_ai': 'What are the similar companies selected by companies in the AI industry?',
+        'q_bio': 'What are the similar companies selected by companies in the bio industry?',
+        'q_game': 'What are the similar companies selected by companies in the game industry?',
+        'q_cloud': 'What are the similar companies selected by companies in the cloud business?',
+        'q_security': 'What are the similar companies selected by companies in the information security industry?',
+        'q_finance_evsales': 'What are the EV/Sales values of finance industry companies issued after 2022?',
+        'q_blockchain': 'What are the similar companies selected by companies in the blockchain business?',
+        'q_industry_wacc': 'What is the industry WACC median?',
+        'q_valuator_wacc': 'Please compare the WACC median by valuation firm',
+        'q_g_wacc': 'Please show cases where g is greater than or equal to WACC',
+        'q_perpetual_cf': 'Please show companies with perpetual cash flow ratio over 50%',
+        'q_wacc_top10': 'What are the top 10 companies with the highest WACC?',
+        'q_high_noa': 'Please show companies with high non-operating assets relative to enterprise value',
+        'q_sector_noa': 'Please show the top 5 non-operating asset composition by industry in order',
+        'q_de_missing': 'Please analyze the impact of D/E non-disclosure on WACC',
+        'q_recent_valuators': 'Please show the top 5 valuation firms by activity in the last 12 months',
+        'q_transaction_matrix': 'Please show inter-industry transaction relationships',
+        'q_investment_mapping': 'Please show investment mapping of public offering companies',
+        'q_multiple_median': 'Please compare industry EV/EBITDA medians',
+        'q_wacc_trend': 'Please show annual industry WACC trends',
+        # 입력 필드
+        'input_question': 'Enter your question:',
+        'input_placeholder': 'Example: What are the similar companies selected by companies in the virtual asset business?',
+        'btn_ask': 'Ask',
+        # 사이드바
+        'sidebar_usage': '📚 Usage',
+        'sidebar_usage_desc': '**Easy Q&A Analysis:**',
+        'sidebar_usage_point1': '- Click example question buttons or directly enter questions',
+        'sidebar_usage_point2': '- Provides various information such as similar companies, financial ratios, and valuation analysis',
+        'sidebar_usage_point3': '- All functions available without an API key',
+        'sidebar_examples': '💡 Example Questions',
+        'sidebar_similar_title': '**Similar Company Questions:**',
+        'sidebar_similar_ex1': '- "Virtual asset business similar companies"',
+        'sidebar_similar_ex2': '- "Music business similar companies"',
+        'sidebar_similar_ex3': '- "Game industry similar companies"',
+        'sidebar_financial_title': '**Financial Ratio Questions:**',
+        'sidebar_financial_ex1': '- "Finance industry EV/Sales"',
+        'sidebar_financial_ex2': '- "Industry WACC median"',
+        'sidebar_financial_ex3': '- "Compare WACC by valuation firm"',
+        'sidebar_valuation_title': '**Valuation Analysis:**',
+        'sidebar_valuation_ex1': '- "Cases where g is greater than WACC"',
+        'sidebar_valuation_ex2': '- "D/E non-disclosure impact analysis"',
+        'sidebar_valuation_ex3': '- "WACC Top 10"',
+        'sidebar_new_title': '**New Analysis:**',
+        'sidebar_new_ex1': '- "Companies with perpetual cash flow ratio over 50%"',
+        'sidebar_new_ex2': '- "Top 5 non-operating asset composition by industry"',
+        'sidebar_new_ex3': '- "2023 Healthcare WACC"',
+        'sidebar_new_ex4': '- "2022 IT Industry WACC"',
+        'sidebar_new_ex5': '- "2023 Bio WACC"',
+        'sidebar_new_ex6': '- "Annual Finance/Consumer/Healthcare WACC"',
+    }
+}
+
 # 세션 상태 초기화
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'gpt_chatbot' not in st.session_state:
     st.session_state.gpt_chatbot = None
+if 'language' not in st.session_state:
+    st.session_state.language = 'ko'  # 기본 언어는 한국어
+
+# 영어 질문을 한글 질문으로 매핑하는 딕셔너리
+EN_TO_KO_QUESTIONS = {
+    # 유사기업 질문
+    'What are the similar companies selected by companies in the virtual asset business?': '가상자산 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the music business?': '음원 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the AI industry?': 'AI 업계 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the bio industry?': '바이오 업계 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the game industry?': '게임 업계 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the cloud business?': '클라우드 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the information security industry?': '정보보안 업계 기업들이 선정한 유사기업은 무엇인가요?',
+    'What are the similar companies selected by companies in the blockchain business?': '블록체인 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?',
+    # 재무비율 질문
+    'What are the EV/Sales values of finance industry companies issued after 2022?': '2022년 이후 발행된 금융업 기업들의 EV/Sales 값은 어떻게 되나요?',
+    # 밸류에이션 분석
+    'What is the industry WACC median?': '산업별 WACC 중앙값은 어떻게 되나요?',
+    'Please compare the WACC median by valuation firm': '평가법인별 WACC 중앙값을 비교해주세요',
+    'Please show cases where g is greater than or equal to WACC': 'g가 WACC보다 크거나 같은 위반 사례들을 보여주세요',
+    # 현금흐름 분석
+    'Please show companies with perpetual cash flow ratio over 50%': '영구현금흐름 비율이 50% 이상인 기업들을 보여주세요',
+    'What are the top 10 companies with the highest WACC?': 'WACC가 가장 높은 상위 10개 기업은 어디인가요?',
+    # 비영업자산 분석
+    'Please show companies with high non-operating assets relative to enterprise value': '기업가치 대비 비영업자산이 많은 기업들을 보여주세요',
+    'Please show the top 5 non-operating asset composition by industry in order': '업종별 비영업용자산구성내역 빈도를 TOP5 순서로 보여주세요',
+    # 품질관리
+    'Please analyze the impact of D/E non-disclosure on WACC': 'D/E 미기재가 WACC에 미치는 영향을 분석해주세요',
+    'Please show the top 5 valuation firms by activity in the last 12 months': '최근 12개월 동안 평가법인별 활동량 TOP5를 보여주세요',
+    # 거래 관계
+    'Please show inter-industry transaction relationships': '업종 간 거래 관계를 보여주세요',
+    'Please show investment mapping of public offering companies': '공시발행기업의 투자 맵핑을 보여주세요',
+    # 기타 분석
+    'Please compare industry EV/EBITDA medians': '산업별 EV/EBITDA 중앙값을 비교해주세요',
+    'Please show annual industry WACC trends': '연도별 산업별 WACC 트렌드를 보여주세요',
+    # 연도별 WACC 질문
+    'What is the average WACC of the finance industry in 2022?': '2022년 금융업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the finance industry in 2023?': '2023년 금융업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the finance industry in 2024?': '2024년 금융업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the finance industry in 2025?': '2025년 금융업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the consumer industry in 2022?': '2022년 소비재의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the consumer industry in 2023?': '2023년 소비재의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the consumer industry in 2024?': '2024년 소비재의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the consumer industry in 2025?': '2025년 소비재의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the healthcare industry in 2022?': '2022년 헬스케어의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the healthcare industry in 2023?': '2023년 헬스케어의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the healthcare industry in 2024?': '2024년 헬스케어의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the healthcare industry in 2025?': '2025년 헬스케어의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the IT industry in 2022?': '2022년 IT의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the IT industry in 2023?': '2023년 IT의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the IT industry in 2024?': '2024년 IT의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the IT industry in 2025?': '2025년 IT의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the manufacturing industry in 2022?': '2022년 제조업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the manufacturing industry in 2023?': '2023년 제조업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the manufacturing industry in 2024?': '2024년 제조업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the manufacturing industry in 2025?': '2025년 제조업의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the bio industry in 2022?': '2022년 바이오의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the bio industry in 2023?': '2023년 바이오의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the bio industry in 2024?': '2024년 바이오의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of the bio industry in 2025?': '2025년 바이오의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of all industries in 2024?': '2024년 전체 업종의 평균 WACC는 얼마인가요?',
+    'What is the average WACC of all industries in 2025?': '2025년 전체 업종의 평균 WACC는 얼마인가요?',
+    # 연도별 주요통계
+    'Please show 2022 key statistics': '2022년 주요통계를 보여주세요',
+    'Please show 2023 key statistics': '2023년 주요통계를 보여주세요',
+    'Please show 2024 key statistics': '2024년 주요통계를 보여주세요',
+    'Please show 2025 key statistics': '2025년 주요통계를 보여주세요',
+}
+
+def translate_question_to_korean(question):
+    """영어 질문을 한글 질문으로 변환"""
+    if question in EN_TO_KO_QUESTIONS:
+        return EN_TO_KO_QUESTIONS[question]
+    return question  # 매핑이 없으면 원본 반환
 
 # 데이터베이스 연결 함수
 def get_db_connection():
@@ -1103,7 +1700,7 @@ def search_by_sector(sector):
     """특정 섹터/산업의 기업들 검색"""
     conn = get_db_connection()
     if conn is None:
-        return None
+        return pd.DataFrame()
     
     query = """
     SELECT DISTINCT 
@@ -1128,7 +1725,111 @@ def search_by_sector(sector):
     except Exception as e:
         st.error(f"검색 오류: {e}")
         conn.close()
-        return None
+        return pd.DataFrame()
+
+def search_by_company_name(company_name):
+    """기업명으로 검색"""
+    conn = get_db_connection()
+    if conn is None:
+        return pd.DataFrame()
+    
+    query = """
+    SELECT DISTINCT 
+        공시보고서명,
+        발행일자,
+        공시발행_기업명,
+        공시발행_기업_산업분류,
+        평가대상기업명,
+        평가대상_주요사업,
+        유사기업,
+        WACC,
+        Link
+    FROM 외평보고서 
+    WHERE 공시발행_기업명 LIKE ? OR 평가대상기업명 LIKE ?
+    ORDER BY 발행일자 DESC
+    """
+    
+    try:
+        df = pd.read_sql_query(query, conn, params=[f'%{company_name}%', f'%{company_name}%'])
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"검색 오류: {e}")
+        conn.close()
+        return pd.DataFrame()
+
+def search_by_business(business):
+    """주요사업으로 검색"""
+    conn = get_db_connection()
+    if conn is None:
+        return pd.DataFrame()
+    
+    query = """
+    SELECT DISTINCT 
+        공시보고서명,
+        발행일자,
+        공시발행_기업명,
+        공시발행_기업_산업분류,
+        평가대상기업명,
+        평가대상_주요사업,
+        유사기업,
+        WACC,
+        Link
+    FROM 외평보고서 
+    WHERE 평가대상_주요사업 LIKE ?
+    ORDER BY 발행일자 DESC
+    """
+    
+    try:
+        df = pd.read_sql_query(query, conn, params=[f'%{business}%'])
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"검색 오류: {e}")
+        conn.close()
+        return pd.DataFrame()
+
+def search_by_date_range(start_date_str, end_date_str=None):
+    """발행일자 기간 범위로 검색"""
+    conn = get_db_connection()
+    if conn is None:
+        return pd.DataFrame()
+    
+    query = """
+    SELECT DISTINCT 
+        공시보고서명,
+        발행일자,
+        공시발행_기업명,
+        공시발행_기업_산업분류,
+        평가대상기업명,
+        평가대상_주요사업,
+        유사기업,
+        WACC,
+        Link
+    FROM 외평보고서 
+    WHERE 발행일자 >= ?
+    """
+    
+    params = [start_date_str]
+    
+    if end_date_str:
+        query += " AND 발행일자 <= ?"
+        params.append(end_date_str)
+    else:
+        # 종료일이 없으면 시작일만 사용 (단일 날짜 검색)
+        query += " AND 발행일자 <= ?"
+        params.append(start_date_str)
+    
+    query += " ORDER BY 발행일자 DESC"
+    
+    try:
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"검색 오류: {e}")
+        conn.close()
+        return pd.DataFrame()
 
 def search_similar_companies(business_keyword):
     """
@@ -1309,116 +2010,131 @@ def generate_structured_sentences(data):
 
 # 메인 앱
 def main():
-    st.title(" 주요사항보고서 공시 DB")
+    # 언어 선택
+    lang = st.session_state.language
+    t = TRANSLATIONS[lang]
+    
+    # 상단에 언어 전환 버튼
+    col_lang1, col_lang2, col_lang_space = st.columns([1, 1, 10])
+    with col_lang1:
+        if st.button("🇰🇷 KR", key="lang_kr", use_container_width=True):
+            st.session_state.language = 'ko'
+            st.rerun()
+    with col_lang2:
+        if st.button("🇺🇸 EN", key="lang_en", use_container_width=True):
+            st.session_state.language = 'en'
+            st.rerun()
+    
+    st.title(f"📊 {t['title']}")
     st.markdown("---")
     
     # 사이드바 설정
     with st.sidebar:
-        st.header("📚 사용법")
-        st.markdown("""
-        **간편한 Q&A 분석:**
-        - 예시 질문 버튼을 클릭하거나 직접 질문 입력
-        - 유사기업, 재무비율, 밸류에이션 분석 등 다양한 정보 제공
-        - API 키 없이도 모든 기능 사용 가능
+        st.header(t['sidebar_usage'])
+        st.markdown(f"""
+        {t['sidebar_usage_desc']}
+        - {t['sidebar_usage_point1']}
+        - {t['sidebar_usage_point2']}
+        - {t['sidebar_usage_point3']}
         """)
         
         st.markdown("---")
-        st.header("💡 예시 질문")
-        st.markdown("""
-        **유사기업 질문:**
-        - "가상자산 사업 유사기업"
-        - "음원 사업 유사기업"
-        - "게임 업계 유사기업"
+        st.header(t['sidebar_examples'])
+        st.markdown(f"""
+        {t['sidebar_similar_title']}
+        - {t['sidebar_similar_ex1']}
+        - {t['sidebar_similar_ex2']}
+        - {t['sidebar_similar_ex3']}
         
-        **재무비율 질문:**
-        - "금융업 기업들의 EV/Sales"
-        - "산업별 WACC 중앙값"
-        - "평가법인별 WACC 비교"
+        {t['sidebar_financial_title']}
+        - {t['sidebar_financial_ex1']}
+        - {t['sidebar_financial_ex2']}
+        - {t['sidebar_financial_ex3']}
         
-        **밸류에이션 분석:**
-        - "g가 WACC보다 큰 위반 사례"
-        - "D/E 미기재 영향 분석"
-        - "WACC Top 10"
+        {t['sidebar_valuation_title']}
+        - {t['sidebar_valuation_ex1']}
+        - {t['sidebar_valuation_ex2']}
+        - {t['sidebar_valuation_ex3']}
         
-        **새로운 분석:**
-        - "영구현금흐름 비율이 50% 이상인 기업"
-        - "업종별 비영업용자산구성내역 TOP5"
-        - "2023년 헬스케어 WACC"
-        - "2022년 IT업 WACC"
-        - "2023년 바이오 WACC"
-        - "연도별 금융업/소비재/헬스케어 WACC"
+        {t['sidebar_new_title']}
+        - {t['sidebar_new_ex1']}
+        - {t['sidebar_new_ex2']}
+        - {t['sidebar_new_ex3']}
+        - {t['sidebar_new_ex4']}
+        - {t['sidebar_new_ex5']}
+        - {t['sidebar_new_ex6']}
         """)
     
     # 메인 탭
-    tab1,  tab2 = st.tabs(["💬 챗봇",  "🔍 데이터 검색"])
+    tab1,  tab2 = st.tabs([t['chat_tab'],  t['search_tab']])
     
     with tab1:
-        st.header("💬 예상 Q&A")
+        st.header(t['chat_header'])
         
         # 예시 질문 버튼들
         col1, col2, col3, col4 = st.columns(4)
         
         # 첫 번째 행: 유사기업 질문들
         with col1:
-            st.markdown("**유사기업 질문**")
-            if st.button("가상자산 사업 유사기업", key="virtual_asset_companies"):
-                st.session_state.example_question = "가상자산 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?"
-            if st.button("음원 사업 유사기업", key="music_companies"):
-                st.session_state.example_question = "음원 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?"
-            if st.button("AI 업계 유사기업", key="ai_companies"):
-                st.session_state.example_question = "AI 업계 기업들이 선정한 유사기업은 무엇인가요?"
+            st.markdown(t['section_similar_q'])
+            if st.button(t['btn_virtual_asset'], key="virtual_asset_companies"):
+                st.session_state.example_question = t['q_virtual_asset']
+            if st.button(t['btn_music'], key="music_companies"):
+                st.session_state.example_question = t['q_music']
+            if st.button(t['btn_ai'], key="ai_companies"):
+                st.session_state.example_question = t['q_ai']
         
         with col2:
-            st.markdown("**업종별 유사기업**")
-            if st.button("바이오 업계 유사기업", key="bio_companies"):
-                st.session_state.example_question = "바이오 업계 기업들이 선정한 유사기업은 무엇인가요?"
-            if st.button("게임 업계 유사기업", key="game_companies"):
-                st.session_state.example_question = "게임 업계 기업들이 선정한 유사기업은 무엇인가요?"
-            if st.button("클라우드 유사기업", key="cloud_companies"):
-                st.session_state.example_question = "클라우드 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?"
+            st.markdown(t['section_industry_similar'])
+            if st.button(t['btn_bio'], key="bio_companies"):
+                st.session_state.example_question = t['q_bio']
+            if st.button(t['btn_game'], key="game_companies"):
+                st.session_state.example_question = t['q_game']
+            if st.button(t['btn_cloud'], key="cloud_companies"):
+                st.session_state.example_question = t['q_cloud']
         
         with col3:
-            st.markdown("**재무비율 질문**")
-            if st.button("정보보안 업계 유사기업", key="security_companies"):
-                st.session_state.example_question = "정보보안 업계 기업들이 선정한 유사기업은 무엇인가요?"
-            if st.button("금융업 기업들의 EV/Sales", key="finance_evsales"):
-                st.session_state.example_question = "2022년 이후 발행된 금융업 기업들의 EV/Sales 값은 어떻게 되나요?"
-            if st.button("블록체인 유사기업", key="blockchain_companies"):
-                st.session_state.example_question = "블록체인 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?"
+            st.markdown(t['section_financial_ratio'])
+            if st.button(t['btn_security'], key="security_companies"):
+                st.session_state.example_question = t['q_security']
+            if st.button(t['btn_finance_evsales'], key="finance_evsales"):
+                st.session_state.example_question = t['q_finance_evsales']
+            if st.button(t['btn_blockchain'], key="blockchain_companies"):
+                st.session_state.example_question = t['q_blockchain']
         
         with col4:
-            st.markdown("**밸류에이션 분석**")
-            if st.button("산업별 WACC 중앙값", key="industry_wacc_median"):
-                st.session_state.example_question = "산업별 WACC 중앙값은 어떻게 되나요?"
-            if st.button("평가법인별 WACC 비교", key="valuator_wacc_compare"):
-                st.session_state.example_question = "평가법인별 WACC 중앙값을 비교해주세요"
-            if st.button("g ≥ WACC 위반", key="g_wacc_violation"):
-                st.session_state.example_question = "g가 WACC보다 크거나 같은 위반 사례들을 보여주세요"
+            st.markdown(t['section_valuation'])
+            if st.button(t['btn_industry_wacc'], key="industry_wacc_median"):
+                st.session_state.example_question = t['q_industry_wacc']
+            if st.button(t['btn_valuator_wacc'], key="valuator_wacc_compare"):
+                st.session_state.example_question = t['q_valuator_wacc']
+            if st.button(t['btn_g_wacc'], key="g_wacc_violation"):
+                st.session_state.example_question = t['q_g_wacc']
         
         # 두 번째 행: 새로운 질문들
         st.markdown("---")
         col5, col6, col7, col8 = st.columns(4)
         
         with col5:
-            st.markdown("**현금흐름 분석**")
-            if st.button("영구현금흐름 비율", key="perpetual_cashflow_ratio"):
-                st.session_state.example_question = "영구현금흐름 비율이 50% 이상인 기업들을 보여주세요"
-            if st.button("WACC Top 10", key="wacc_top10"):
-                st.session_state.example_question = "WACC가 가장 높은 상위 10개 기업은 어디인가요?"
+            st.markdown(t['section_cashflow'])
+            if st.button(t['btn_perpetual_cf'], key="perpetual_cashflow_ratio"):
+                st.session_state.example_question = t['q_perpetual_cf']
+            if st.button(t['btn_wacc_top10'], key="wacc_top10"):
+                st.session_state.example_question = t['q_wacc_top10']
         
         with col6:
-            st.markdown("**비영업자산 분석**")
-            if st.button("비영업자산 비중 높은 기업", key="high_noa_companies"):
-                st.session_state.example_question = "기업가치 대비 비영업자산이 많은 기업들을 보여주세요"
-            if st.button("업종별 비영업자산구성", key="sector_noa_composition"):
-                st.session_state.example_question = "업종별 비영업용자산구성내역 빈도를 TOP5 순서로 보여주세요"
+            st.markdown(t['section_noa'])
+            if st.button(t['btn_high_noa'], key="high_noa_companies"):
+                st.session_state.example_question = t['q_high_noa']
+            if st.button(t['btn_sector_noa'], key="sector_noa_composition"):
+                st.session_state.example_question = t['q_sector_noa']
         
         with col7:
-            st.markdown("**품질관리(QC)**")
-            if st.button("D/E 미기재 영향", key="de_missing_impact"):
-                st.session_state.example_question = "D/E 미기재가 WACC에 미치는 영향을 분석해주세요"
-            if st.button("최근 12개월 평가법인", key="recent_12m_valuators"):
-                st.session_state.example_question = "최근 12개월 동안 평가법인별 활동량 TOP5를 보여주세요"
+            st.markdown(t['qc_analysis'])
+            if st.button(t['btn_de_missing'], key="de_missing_impact"):
+                st.session_state.example_question = t['q_de_missing']
+            if st.button(t['btn_recent_valuators'], key="recent_12m_valuators"):
+                st.session_state.example_question = t['q_recent_valuators']
         
         
         # 세 번째 행: 추가 연도별+업종별 조합
@@ -1426,49 +2142,143 @@ def main():
         col9, col10, col11, col12, col13 = st.columns(5)
         
         with col9:
-            st.markdown("**연도별 금융업 분석**")
-            if st.button("2022년 금융업 WACC", key="finance_2022_wacc"):
-                st.session_state.example_question = "2022년 금융업의 평균 WACC는 얼마인가요?"
-            if st.button("2023년 금융업 WACC", key="finance_2023_wacc"):
-                st.session_state.example_question = "2023년 금융업의 평균 WACC는 얼마인가요?"
+            st.markdown(t['industry_finance'])
+            year_btn_text = {2022: "2022년 금융업 WACC" if lang == 'ko' else "2022 Finance WACC",
+                             2023: "2023년 금융업 WACC" if lang == 'ko' else "2023 Finance WACC",
+                             2024: "2024년 금융업 WACC" if lang == 'ko' else "2024 Finance WACC",
+                             2025: "2025년 금융업 WACC" if lang == 'ko' else "2025 Finance WACC"}
+            year_q_text = {2022: "2022년 금융업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the finance industry in 2022?",
+                           2023: "2023년 금융업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the finance industry in 2023?",
+                           2024: "2024년 금융업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the finance industry in 2024?",
+                           2025: "2025년 금융업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the finance industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"finance_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
         
         with col10:
-            st.markdown("**연도별 소비재 분석**")
-            if st.button("2022년 소비재 WACC", key="consumer_2022_wacc"):
-                st.session_state.example_question = "2022년 소비재의 평균 WACC는 얼마인가요?"
-            if st.button("2023년 소비재 WACC", key="consumer_2023_wacc"):
-                st.session_state.example_question = "2023년 소비재의 평균 WACC는 얼마인가요?"
+            st.markdown(t['industry_consumer'])
+            year_btn_text = {2022: "2022년 소비재 WACC" if lang == 'ko' else "2022 Consumer WACC",
+                             2023: "2023년 소비재 WACC" if lang == 'ko' else "2023 Consumer WACC",
+                             2024: "2024년 소비재 WACC" if lang == 'ko' else "2024 Consumer WACC",
+                             2025: "2025년 소비재 WACC" if lang == 'ko' else "2025 Consumer WACC"}
+            year_q_text = {2022: "2022년 소비재의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the consumer industry in 2022?",
+                           2023: "2023년 소비재의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the consumer industry in 2023?",
+                           2024: "2024년 소비재의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the consumer industry in 2024?",
+                           2025: "2025년 소비재의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the consumer industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"consumer_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
         
         with col11:
-            st.markdown("**연도별 헬스케어 분석**")
-            if st.button("2022년 헬스케어 WACC", key="healthcare_2022_wacc"):
-                st.session_state.example_question = "2022년 헬스케어의 평균 WACC는 얼마인가요?"
-            if st.button("2023년 헬스케어 WACC", key="healthcare_2023_wacc"):
-                st.session_state.example_question = "2023년 헬스케어의 평균 WACC는 얼마인가요?"
+            st.markdown(t['industry_healthcare'])
+            year_btn_text = {2022: "2022년 헬스케어 WACC" if lang == 'ko' else "2022 Healthcare WACC",
+                             2023: "2023년 헬스케어 WACC" if lang == 'ko' else "2023 Healthcare WACC",
+                             2024: "2024년 헬스케어 WACC" if lang == 'ko' else "2024 Healthcare WACC",
+                             2025: "2025년 헬스케어 WACC" if lang == 'ko' else "2025 Healthcare WACC"}
+            year_q_text = {2022: "2022년 헬스케어의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the healthcare industry in 2022?",
+                           2023: "2023년 헬스케어의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the healthcare industry in 2023?",
+                           2024: "2024년 헬스케어의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the healthcare industry in 2024?",
+                           2025: "2025년 헬스케어의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the healthcare industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"healthcare_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
         
         with col12:
-            st.markdown("**업종 간 거래 관계**")
-            if st.button("업종 간 거래 매트릭스", key="sector_transaction_matrix"):
-                st.session_state.example_question = "업종 간 거래 관계를 보여주세요"
-            if st.button("투자 맵핑 분석", key="investment_mapping"):
-                st.session_state.example_question = "공시발행기업의 투자 맵핑을 보여주세요"
+            st.markdown(t['industry_it'])
+            year_btn_text = {2022: "2022년 IT WACC" if lang == 'ko' else "2022 IT WACC",
+                             2023: "2023년 IT WACC" if lang == 'ko' else "2023 IT WACC",
+                             2024: "2024년 IT WACC" if lang == 'ko' else "2024 IT WACC",
+                             2025: "2025년 IT WACC" if lang == 'ko' else "2025 IT WACC"}
+            year_q_text = {2022: "2022년 IT의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the IT industry in 2022?",
+                           2023: "2023년 IT의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the IT industry in 2023?",
+                           2024: "2024년 IT의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the IT industry in 2024?",
+                           2025: "2025년 IT의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the IT industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"it_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
         
         with col13:
-            st.markdown("**기타 분석**")
-            if st.button("산업별 멀티플 중앙값", key="industry_multiple_median"):
-                st.session_state.example_question = "산업별 EV/EBITDA 중앙값을 비교해주세요"
-            if st.button("2024년 전체 WACC", key="overall_2024_wacc"):
-                st.session_state.example_question = "2024년 전체 업종의 평균 WACC는 얼마인가요?"
+            st.markdown(t['industry_manufacturing'])
+            year_btn_text = {2022: "2022년 제조업 WACC" if lang == 'ko' else "2022 Manufacturing WACC",
+                             2023: "2023년 제조업 WACC" if lang == 'ko' else "2023 Manufacturing WACC",
+                             2024: "2024년 제조업 WACC" if lang == 'ko' else "2024 Manufacturing WACC",
+                             2025: "2025년 제조업 WACC" if lang == 'ko' else "2025 Manufacturing WACC"}
+            year_q_text = {2022: "2022년 제조업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the manufacturing industry in 2022?",
+                           2023: "2023년 제조업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the manufacturing industry in 2023?",
+                           2024: "2024년 제조업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the manufacturing industry in 2024?",
+                           2025: "2025년 제조업의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the manufacturing industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"manufacturing_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
+        
+        # 네 번째 행: 추가 업종 및 기타 분석
+        st.markdown("---")
+        col14, col15, col16, col17, col18 = st.columns(5)
+        
+        with col14:
+            st.markdown(t['industry_bio'])
+            year_btn_text = {2022: "2022년 바이오 WACC" if lang == 'ko' else "2022 Bio WACC",
+                             2023: "2023년 바이오 WACC" if lang == 'ko' else "2023 Bio WACC",
+                             2024: "2024년 바이오 WACC" if lang == 'ko' else "2024 Bio WACC",
+                             2025: "2025년 바이오 WACC" if lang == 'ko' else "2025 Bio WACC"}
+            year_q_text = {2022: "2022년 바이오의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the bio industry in 2022?",
+                           2023: "2023년 바이오의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the bio industry in 2023?",
+                           2024: "2024년 바이오의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the bio industry in 2024?",
+                           2025: "2025년 바이오의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of the bio industry in 2025?"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"bio_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
+        
+        with col15:
+            st.markdown(t['transaction_rel'])
+            if st.button(t['btn_transaction_matrix'], key="sector_transaction_matrix"):
+                st.session_state.example_question = t['q_transaction_matrix']
+            if st.button(t['btn_investment_mapping'], key="investment_mapping"):
+                st.session_state.example_question = t['q_investment_mapping']
+        
+        with col16:
+            st.markdown(t['other_analysis'])
+            if st.button(t['btn_multiple_median'], key="industry_multiple_median"):
+                st.session_state.example_question = t['q_multiple_median']
+            year_btn_text = {2024: "2024년 전체 WACC" if lang == 'ko' else "2024 Overall WACC",
+                             2025: "2025년 전체 WACC" if lang == 'ko' else "2025 Overall WACC"}
+            year_q_text = {2024: "2024년 전체 업종의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of all industries in 2024?",
+                           2025: "2025년 전체 업종의 평균 WACC는 얼마인가요?" if lang == 'ko' else "What is the average WACC of all industries in 2025?"}
+            for year in [2024, 2025]:
+                if st.button(year_btn_text[year], key=f"overall_{year}_wacc"):
+                    st.session_state.example_question = year_q_text[year]
+        
+        with col17:
+            st.markdown(t['yearly_stats'])
+            year_btn_text = {2022: "2022년 주요통계" if lang == 'ko' else "2022 Key Statistics",
+                             2023: "2023년 주요통계" if lang == 'ko' else "2023 Key Statistics",
+                             2024: "2024년 주요통계" if lang == 'ko' else "2024 Key Statistics",
+                             2025: "2025년 주요통계" if lang == 'ko' else "2025 Key Statistics"}
+            year_q_text = {2022: "2022년 주요통계를 보여주세요" if lang == 'ko' else "Please show 2022 key statistics",
+                           2023: "2023년 주요통계를 보여주세요" if lang == 'ko' else "Please show 2023 key statistics",
+                           2024: "2024년 주요통계를 보여주세요" if lang == 'ko' else "Please show 2024 key statistics",
+                           2025: "2025년 주요통계를 보여주세요" if lang == 'ko' else "Please show 2025 key statistics"}
+            for year in [2022, 2023, 2024, 2025]:
+                if st.button(year_btn_text[year], key=f"stats_{year}"):
+                    st.session_state.example_question = year_q_text[year]
+        
+        with col18:
+            st.markdown(t['wacc_trend'])
+            if st.button(t['btn_wacc_trend'], key="wacc_trend_analysis"):
+                st.session_state.example_question = t['q_wacc_trend']
         
         # 사용자 입력
         user_question = st.text_input(
-            "질문을 입력하세요:",
+            t['input_question'],
             value=st.session_state.get("example_question", ""),
-            placeholder="예: 가상자산 사업을 하는 기업들이 선정한 유사기업은 무엇인가요?"
+            placeholder=t['input_placeholder']
         )
         
-        if st.button("질문하기", key="ask_question") or user_question:
+        if st.button(t['btn_ask'], key="ask_question") or user_question:
             if user_question:
+                # 영어 질문을 한글 질문으로 변환 (내부 처리용)
+                original_question = user_question
+                user_question = translate_question_to_korean(user_question)
                 
                 # 데이터 검색
                 if "유사기업" in user_question or "유사" in user_question:
@@ -1626,7 +2436,7 @@ def main():
                             st.metric("평가대상 기업 수", unique_targets)
                         
                 
-                elif any(keyword in user_question for keyword in ["산업별", "중앙값", "WACC", "평가법인", "위반", "미기재", "Top", "상위", "최근", "영구현금흐름", "비영업용자산구성", "비영업자산", "업종", "거래", "투자", "맵핑", "매핑"]):
+                elif any(keyword in user_question for keyword in ["산업별", "중앙값", "WACC", "평가법인", "위반", "미기재", "Top", "상위", "최근", "영구현금흐름", "비영업용자산구성", "비영업자산", "업종", "거래", "투자", "맵핑", "매핑", "주요통계", "통계", "트렌드"]):
                     # 밸류에이션 분석 질문들 처리
                     st.info(f"🔍 밸류에이션 분석 질문으로 인식: '{user_question}'")
                     processed = process_valuation_analysis(user_question)
@@ -1735,32 +2545,134 @@ def main():
                 st.warning("질문을 입력해주세요.")
     
     with tab2:
-        st.header("🔍 데이터 검색")
+        st.header(t['search_header'])
         
         # 검색 옵션
-        search_option = st.selectbox(
-            "검색 유형을 선택하세요:",
-            ["기업명", "산업분류", "주요사업", "발행일자"]
+        search_options = [t['company_name'], t['industry'], t['business'], t['issue_date']]
+        search_option_map = {
+            t['company_name']: "기업명",
+            t['industry']: "산업분류", 
+            t['business']: "주요사업",
+            t['issue_date']: "발행일자"
+        }
+        
+        search_option_display = st.selectbox(
+            t['search_type'],
+            search_options
         )
+        search_option = search_option_map[search_option_display]
         
         if search_option == "기업명":
-            search_term = st.text_input("기업명을 입력하세요:")
+            search_term = st.text_input(t['enter_company'])
         elif search_option == "산업분류":
-            search_term = st.text_input("산업분류를 입력하세요:")
+            search_term = st.text_input(t['enter_industry'])
         elif search_option == "주요사업":
-            search_term = st.text_input("주요사업을 입력하세요:")
+            search_term = st.text_input(t['enter_business'])
         else:  # 발행일자
-            search_term = st.date_input("발행일자를 선택하세요:")
+            # DB에서 최소/최대 날짜 가져오기
+            conn = get_db_connection()
+            min_date = None
+            max_date = None
+            if conn:
+                try:
+                    date_query = "SELECT MIN(발행일자) as min_date, MAX(발행일자) as max_date FROM 외평보고서 WHERE 발행일자 IS NOT NULL"
+                    date_df = pd.read_sql_query(date_query, conn)
+                    conn.close()
+                    if not date_df.empty and pd.notna(date_df.iloc[0]['min_date']):
+                        min_date = pd.to_datetime(date_df.iloc[0]['min_date']).date()
+                        max_date = pd.to_datetime(date_df.iloc[0]['max_date']).date()
+                except:
+                    if conn:
+                        conn.close()
+            
+            # 날짜 범위 선택 (시작일과 종료일)
+            if min_date and max_date:
+                # 기본값: 최근 1년
+                from datetime import timedelta
+                default_end = max_date
+                default_start = max(default_end - timedelta(days=365), min_date)
+                
+                date_range = st.date_input(
+                    t['select_date'],
+                    value=(default_start, default_end),
+                    min_value=min_date,
+                    max_value=max_date,
+                    help=t['select_date']
+                )
+            else:
+                date_range = st.date_input(
+                    t['select_date'],
+                    value=None,
+                    help=t['select_date']
+                )
         
-        if st.button("검색", key="search_button"):
-            if search_term:
-                # 검색 실행
-                if search_option == "발행일자":
-                    search_term = search_term.strftime("%Y-%m-%d")
+        if st.button(t['search_button'], key="search_button"):
+            if search_option == "발행일자":
+                # 날짜 범위 처리
+                if date_range:
+                    try:
+                        if isinstance(date_range, tuple):
+                            if len(date_range) == 2:
+                                # 기간 범위 선택 (시작일, 종료일)
+                                start_date = date_range[0]
+                                end_date = date_range[1]
+                                if start_date and end_date:
+                                    start_date_str = start_date.strftime("%Y-%m-%d")
+                                    end_date_str = end_date.strftime("%Y-%m-%d")
+                                    data = search_by_date_range(start_date_str, end_date_str)
+                                else:
+                                    st.warning("시작일과 종료일을 모두 선택해주세요.")
+                                    data = pd.DataFrame()
+                            elif len(date_range) == 1:
+                                # 단일 날짜만 선택 (튜플에 하나만)
+                                start_date = date_range[0]
+                                if start_date:
+                                    start_date_str = start_date.strftime("%Y-%m-%d")
+                                    data = search_by_date_range(start_date_str, start_date_str)
+                                else:
+                                    st.warning("발행일자를 선택해주세요.")
+                                    data = pd.DataFrame()
+                            else:
+                                st.warning("발행일자를 선택해주세요.")
+                                data = pd.DataFrame()
+                        else:
+                            # 단일 날짜 객체 (date 객체)
+                            start_date_str = date_range.strftime("%Y-%m-%d")
+                            data = search_by_date_range(start_date_str, start_date_str)
+                    except Exception as e:
+                        st.error(f"날짜 처리 오류: {e}")
+                        data = pd.DataFrame()
+                else:
+                    st.warning("발행일자를 선택해주세요.")
+                    data = pd.DataFrame()
+            elif search_term:
+                # 검색 옵션에 따라 다른 검색 함수 사용
+                if search_option == "기업명":
+                    data = search_by_company_name(str(search_term))
+                elif search_option == "산업분류":
+                    data = search_by_sector(str(search_term))
+                elif search_option == "주요사업":
+                    data = search_by_business(str(search_term))
                 
-                data = search_by_sector(str(search_term))
+            else:
+                if search_option != "발행일자":
+                    st.warning("검색어를 입력해주세요.")
+                    data = pd.DataFrame()
+            
+            # 검색 결과 표시
+            if 'data' in locals() and data is not None and not data.empty:
+                # 검색 조건 표시
+                if search_option == "발행일자" and date_range:
+                    try:
+                        if isinstance(date_range, tuple) and len(date_range) == 2 and date_range[0] and date_range[1]:
+                            st.info(f"🔍 검색 기간: {date_range[0].strftime('%Y-%m-%d')} ~ {date_range[1].strftime('%Y-%m-%d')}")
+                        else:
+                            date_display = date_range[0] if (isinstance(date_range, tuple) and len(date_range) > 0) else date_range
+                            if date_display:
+                                st.info(f"🔍 검색 날짜: {date_display.strftime('%Y-%m-%d')}")
+                    except:
+                        pass
                 
-                if not data.empty:
                     st.success(f"✅ 검색 결과 {len(data)}건을 찾았습니다.")
                     
                     # 표시할 컬럼 선택 (존재하는 컬럼만)
@@ -1773,12 +2685,14 @@ def main():
                         display_columns.append('WACC')
                     if 'Link' in data.columns:
                         display_columns.append('Link')
-                    
-                    st.dataframe(data[display_columns], width='stretch', hide_index=True)
-                else:
+                if '공시보고서명' in data.columns:
+                    display_columns.insert(0, '공시보고서명')
+                
+                # 존재하는 컬럼만 표시
+                available_columns = [col for col in display_columns if col in data.columns]
+                st.dataframe(data[available_columns], width='stretch', hide_index=True)
+            elif 'data' in locals():
                     st.warning("검색 결과를 찾을 수 없습니다.")
-            else:
-                st.warning("검색어를 입력해주세요.")
 
 if __name__ == "__main__":
     main()
