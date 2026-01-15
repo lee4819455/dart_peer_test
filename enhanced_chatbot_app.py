@@ -1838,8 +1838,25 @@ def search_similar_companies(business_keyword):
     try:
         conn = sqlite3.connect('외평보고서.db')
         
+        # 먼저 실제 컬럼명 확인
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(외평보고서)")
+        columns_info = cursor.fetchall()
+        available_columns = [col[1] for col in columns_info]
+        
+        # Link 컬럼 찾기
+        link_column = None
+        possible_link_columns = ['Link', '링크', 'URL', '원문링크', '원문_링크', 'Link_URL', '공시링크', '공시_링크']
+        for col_name in possible_link_columns:
+            if col_name in available_columns:
+                link_column = col_name
+                break
+        
+        # Link 컬럼이 없으면 빈 문자열로 처리
+        link_select = f", {link_column}" if link_column else ", '' as Link"
+        
         # 음원, 가상자산 등 특정 키워드에 대한 더 정확한 검색
-        query = """
+        query = f"""
         SELECT DISTINCT
             공시발행_기업명,
             공시발행_기업_산업분류,
@@ -1848,8 +1865,8 @@ def search_similar_companies(business_keyword):
             평가대상_주요사업,
             공시보고서명,
             발행일자,
-            유사기업,
-            Link
+            유사기업
+            {link_select}
         FROM 외평보고서
         WHERE (
             평가대상_주요사업 LIKE ? OR 
@@ -1980,7 +1997,29 @@ def generate_structured_sentences(data):
         평가대상기업명 = row.get('평가대상기업명', 'N/A')
         공시보고서명 = row.get('공시보고서명', 'N/A')
         유사기업 = row.get('유사기업', 'N/A')
-        Link = row.get('Link', '')
+        
+        # Link 컬럼 찾기 (여러 가능한 컬럼명 시도)
+        Link = ''
+        possible_link_columns = ['Link', '링크', 'URL', '원문링크', '원문_링크', 'Link_URL', '공시링크', '공시_링크']
+        for col_name in possible_link_columns:
+            if col_name in row.index and pd.notna(row.get(col_name)) and str(row.get(col_name)).strip() != '':
+                link_value = str(row.get(col_name)).strip()
+                # "현금및현금성자산" 같은 잘못된 값 필터링 (URL 형식이 아닌 경우)
+                # 한글이 포함되어 있으면 링크가 아님
+                if any(ord(char) >= 0xAC00 and ord(char) <= 0xD7A3 for char in link_value):
+                    continue
+                # URL 형식 확인
+                if link_value.startswith('http://') or link_value.startswith('https://') or link_value.startswith('www.'):
+                    Link = link_value
+                    break
+                # 숫자로만 구성된 경우도 링크일 수 있음 (DART 고유번호 등)
+                elif link_value.isdigit() and len(link_value) >= 8:
+                    Link = link_value
+                    break
+                # 일반적인 URL 패턴이 있는 경우
+                elif 'dart' in link_value.lower() or 'krx' in link_value.lower() or 'kis' in link_value.lower():
+                    Link = link_value
+                    break
         
         # 공시보고서명이 없거나 비어있으면 기본값 사용
         if pd.isna(공시보고서명) or 공시보고서명 == '':
@@ -2000,8 +2039,8 @@ def generate_structured_sentences(data):
             # 문장 생성
             sentence = f"{발행일자}\n{공시발행_기업명}은 「{공시보고서명}」에서 {평가대상기업명} 관련 평가 시 유사기업으로 {similar_companies_str}을 선정했다."
             
-            # 링크가 있으면 추가
-            if pd.notna(Link) and Link != '' and str(Link).strip() != '':
+            # 링크가 있으면 추가 (유효한 링크인 경우에만)
+            if Link and Link != '':
                 sentence += f"\n\n원문은 여기에서 확인할 수 있다: {Link}"
             
             sentences.append(sentence)
